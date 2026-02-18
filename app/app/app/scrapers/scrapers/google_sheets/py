@@ -1,0 +1,184 @@
+"""
+Project Sauce — Google Sheets Integration
+Pushes scraped deals to a Google Sheet that the app reads from.
+
+Setup:
+  1. Go to console.cloud.google.com
+  2. Create a project (free)
+  3. Enable "Google Sheets API"
+  4. Create a Service Account → download JSON key
+  5. Share your Google Sheet with the service account email
+  6. Set environment variables:
+     - GOOGLE_SHEETS_CREDENTIALS: path to JSON key file (or JSON string)
+     - GOOGLE_SHEET_ID: the spreadsheet ID from the URL
+
+The Google Sheet should have a tab called "deals" with these columns:
+  A: store | B: item | C: price | D: original_price | E: category
+  F: icon | G: expires_in | H: sale_story | I: source | J: scraped_at
+"""
+
+import os
+import json
+from datetime import datetime
+
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSPREAD_AVAILABLE = True
+except ImportError:
+    GSPREAD_AVAILABLE = False
+
+
+# Google Sheets API scopes
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+# Sheet tab names
+DEALS_TAB = "deals"
+STORES_TAB = "stores"
+META_TAB = "meta"
+
+
+def get_google_sheets_client():
+    """Authenticate and return a gspread client."""
+    if not GSPREAD_AVAILABLE:
+        raise ImportError(
+            "gspread not installed. Run: pip install gspread google-auth"
+        )
+
+    creds_source = os.environ.get("GOOGLE_SHEETS_CREDENTIALS", "")
+
+    if not creds_source:
+        raise ValueError(
+            "Set GOOGLE_SHEETS_CREDENTIALS env var to the path of your "
+            "service account JSON file or the JSON string itself."
+        )
+
+    # Check if it's a file path or a JSON string
+    if os.path.isfile(creds_source):
+        creds = Credentials.from_service_account_file(creds_source, scopes=SCOPES)
+    else:
+        # Assume it's a JSON string (useful for GitHub Actions secrets)
+        creds_data = json.loads(creds_source)
+        creds = Credentials.from_service_account_info(creds_data, scopes=SCOPES)
+
+    return gspread.authorize(creds)
+
+
+def get_spreadsheet():
+    """Get the Project Sauce spreadsheet."""
+    sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
+    if not sheet_id:
+        raise ValueError("Set GOOGLE_SHEET_ID env var to your spreadsheet ID")
+
+    client = get_google_sheets_client()
+    return client.open_by_key(sheet_id)
+
+
+def push_deals_to_sheets(deals):
+    """
+    Push scraped deals to the Google Sheet.
+    Clears the existing deals and writes fresh data.
+    """
+    print("\n📤 Pushing deals to Google Sheets...")
+
+    spreadsheet = get_spreadsheet()
+
+    # Get or create the deals tab
+    try:
+        worksheet = spreadsheet.worksheet(DEALS_TAB)
+    except gspread.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(title=DEALS_TAB, rows=500, cols=12)
+
+    # Headers
+    headers = [
+        "store", "item", "price", "original_price", "category",
+        "icon", "expires_in", "sale_story", "source", "scraped_at",
+    ]
+
+    # Build rows
+    rows = [headers]
+    for deal in deals:
+        rows.append([
+            deal.get("store", ""),
+            deal.get("item", ""),
+            deal.get("price", ""),
+            deal.get("original_price", ""),
+            deal.get("category", ""),
+            deal.get("icon", ""),
+            deal.get("expires_in", ""),
+            deal.get("sale_story", ""),
+            deal.get("source", ""),
+            deal.get("scraped_at", ""),
+        ])
+
+    # Clear and write
+    worksheet.clear()
+    worksheet.update(range_name="A1", values=rows)
+
+    # Update metadata tab
+    try:
+        meta_ws = spreadsheet.worksheet(META_TAB)
+    except gspread.WorksheetNotFound:
+        meta_ws = spreadsheet.add_worksheet(title=META_TAB, rows=10, cols=2)
+
+    meta_ws.clear()
+    meta_ws.update(range_name="A1", values=[
+        ["last_updated", datetime.now().isoformat()],
+        ["total_deals", str(len(deals))],
+        ["postal_code", "11201"],
+        ["week_of", datetime.now().strftime("%B %d, %Y")],
+    ])
+
+    print(f"  ✅ Pushed {len(deals)} deals to Google Sheets")
+    print(f"     Sheet: https://docs.google.com/spreadsheets/d/{os.environ.get('GOOGLE_SHEET_ID')}")
+
+
+def read_deals_from_sheets():
+    """
+    Read deals from Google Sheets.
+    Used by the app to display current deals.
+    Returns a list of deal dicts.
+    """
+    spreadsheet = get_spreadsheet()
+    worksheet = spreadsheet.worksheet(DEALS_TAB)
+    records = worksheet.get_all_records()
+    return records
+
+
+# ─────────────────────────────────────────────────────────────
+# PUBLIC SHEETS ACCESS (no auth needed)
+# For the frontend app, we use a published Google Sheet
+# which can be read as JSON without authentication.
+# ─────────────────────────────────────────────────────────────
+
+def get_public_sheet_url(sheet_id, tab_name="deals"):
+    """
+    Generate a URL to read a published Google Sheet as JSON.
+
+    To make this work:
+    1. In Google Sheets, go to File → Share → Publish to web
+    2. Select the "deals" tab and publish as CSV
+    3. The app can fetch this URL directly (no API key needed)
+
+    CSV URL format:
+    https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={TAB}
+    """
+    return (
+        f"https://docs.google.com/spreadsheets/d/{sheet_id}"
+        f"/gviz/tq?tqx=out:csv&sheet={tab_name}"
+    )
+
+
+if __name__ == "__main__":
+    # Test: read current deals
+    try:
+        deals = read_deals_from_sheets()
+        print(f"Current deals in sheet: {len(deals)}")
+        for d in deals[:5]:
+            print(f"  {d.get('icon', '')} {d.get('item', '')}: {d.get('price', '')} @ {d.get('store', '')}")
+    except Exception as e:
+        print(f"Error: {e}")
+        print("Make sure GOOGLE_SHEETS_CREDENTIALS and GOOGLE_SHEET_ID are set.")
