@@ -14,7 +14,7 @@ import { useState, useEffect } from "react";
 
 // ─── CONFIG ──────────────────────────────────────────────
 // Replace with your published Google Sheet ID after setup
-const GOOGLE_SHEET_ID = "YOUR_SHEET_ID_HERE";
+const GOOGLE_SHEET_ID = "d/1-gULdIkV0gZRAY6Mwtk5GpQTCFWRnjqXl9TNWr8cUow";
 const DEALS_CSV_URL = `https://docs.google.com/spreadsheets/d/${GOOGLE_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=deals`;
 
 // ─── FALLBACK DATA ───────────────────────────────────────
