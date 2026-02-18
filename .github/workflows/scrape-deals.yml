@@ -1,0 +1,47 @@
+name: Scrape Weekly defaults:
+  on:
+  schedule:
+    - cron: '0 11 * * 3'
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          cd scrapers
+          pip install -r requirements.txt
+
+      - name: Run deal scraper
+        env:
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+        run: |
+          cd scrapers
+          python scrape_deals.py --output deals.json
+
+      - name: Upload deals artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deals-${{ github.run_number }}
+          path: scrapers/deals.json
+          retention-days: 30
+
+      - name: Commit deals.json to repo
+        run: |
+          git config user.name "Project Sauce Bot"
+          git config user.email "bot@projectsauce.org"
+          cp scrapers/deals.json app/public/deals.json
+          git add app/public/deals.json
+          git diff --staged --quiet || git commit -m "Update deals - $(date +'%B %d, %Y')"
+          git push
